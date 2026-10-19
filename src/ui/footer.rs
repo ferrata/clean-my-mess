@@ -17,7 +17,7 @@ pub(crate) fn footer_line(app: &App) -> Line<'static> {
         return Line::from(app.status.clone()).fg(Color::Green);
     }
     let Some(entry) = app.entries.get(app.cursor) else {
-        let msg = if app.scanning { "Scanning for waste…" } else { "No waste in this directory." };
+        let msg = if !app.view_complete() { "Scanning for waste…" } else { "No waste in this directory." };
         return Line::from(vec![Span::raw(msg), Span::raw("  "), key("←", Color::Yellow), Span::raw(" up  q quit")]);
     };
     if !app.selected.is_empty() {
@@ -33,7 +33,7 @@ pub(crate) fn footer_line(app: &App) -> Line<'static> {
         ]);
     }
     if entry.count == 0 {
-        let note = if app.scanning { "no waste found yet (still scanning)" } else { "clean" };
+        let note = if app.entry_pending(entry) { "no waste found yet (still scanning)" } else { "clean" };
         return Line::from(vec![
             Span::raw(format!("{note}  ")),
             key("→", Color::Yellow),

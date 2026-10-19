@@ -55,3 +55,53 @@ fn scan_stops_when_cancelled() {
     scan::scan(dir.0.clone(), tx, Arc::new(AtomicBool::new(true)));
     assert_eq!(rx.into_iter().count(), 0);
 }
+
+fn collect_until_done(rx: &mpsc::Receiver<scan::Msg>) -> Vec<String> {
+    let mut found = Vec::new();
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_secs(10)).expect("scan finished in time") {
+            scan::Msg::Found(item) => found.push(item.path.display().to_string()),
+            scan::Msg::Done => return found,
+            scan::Msg::Progress(_) => {}
+        }
+    }
+}
+
+#[test]
+fn extending_the_root_reuses_earlier_results() {
+    let dir = TempDir::new();
+    dir.file("top/p/node_modules/x", 100);
+    dir.file("top/sibling/node_modules/x", 100);
+    dir.file("top/sibling/deeper/__pycache__/x", 100);
+    let (top, p) = (dir.0.join("top"), dir.0.join("top/p"));
+
+    let (tx, rx) = mpsc::channel();
+    let scanner = scan::Scanner::start(p.clone(), tx);
+    let first = collect_until_done(&rx);
+    assert_eq!(first, vec![p.join("node_modules").display().to_string()]);
+
+    scanner.extend(top.clone(), p);
+    let mut second = collect_until_done(&rx);
+    second.sort();
+    assert_eq!(
+        second,
+        vec![
+            top.join("sibling/deeper/__pycache__").display().to_string(),
+            top.join("sibling/node_modules").display().to_string(),
+        ],
+        "only the new siblings are scanned; p/ is not reported twice"
+    );
+}
+
+#[test]
+fn progress_reports_which_subtrees_are_still_pending() {
+    let dir = TempDir::new();
+    dir.file("top/a/node_modules/x", 100);
+    let (tx, rx) = mpsc::channel();
+    let scanner = scan::Scanner::start(dir.0.join("top"), tx);
+    collect_until_done(&rx);
+    let progress = scanner.progress(&dir.0.join("top"));
+    assert!(!progress.running);
+    assert!(!progress.base_pending);
+    assert!(progress.pending_children.is_empty());
+}

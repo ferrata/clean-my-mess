@@ -26,10 +26,12 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Length(4), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
 
     let totals = app.kind_totals();
-    let scan_state = if app.scanning {
-        format!("{} scanning… {} dirs", spinner(app.started), app.visited)
+    let scan_state = if !app.scanning {
+        "scan done".to_string()
+    } else if app.view_complete() {
+        format!("✓ this folder done · {} scanning elsewhere… {} dirs", spinner(app.started), app.visited)
     } else {
-        "scan done".into()
+        format!("{} scanning… {} dirs", spinner(app.started), app.visited)
     };
     let block = Block::bordered().title(format!(" {} · {} ", app.cwd.display(), scan_state));
     let inner = block.inner(header);
@@ -47,7 +49,11 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
             let mark = if app.selected.contains(&entry.path) { "[x]" } else { "[ ]" };
             let kind = entry.kind.unwrap_or_else(|| entry.dominant());
             if entry.count == 0 {
-                let label = if app.scanning { format!("{} scanning…", spinner(app.started)) } else { "clean".into() };
+                let label = if app.entry_pending(entry) {
+                    format!("{} scanning…", spinner(app.started))
+                } else {
+                    "clean".into()
+                };
                 let dim = Style::new().fg(MUTED);
                 return ListItem::new(Line::from(vec![
                     Span::raw(format!("{mark} ")),

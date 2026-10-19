@@ -20,7 +20,7 @@ use ratatui::{
 use crate::{
     delete,
     format::{human, plural},
-    scan::{self, Item, Msg},
+    scan::{Item, Msg, Scanner},
     tree::{build_entries, list_dirs, Entry},
     ui,
 };
@@ -75,7 +75,9 @@ pub struct App {
     pub(crate) root: PathBuf,
     pub(crate) cwd: PathBuf,
     pub(crate) rx: Receiver<Msg>,
-    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) scanner: Option<Scanner>,
+    pub(crate) base_pending: bool,
+    pub(crate) pending_children: HashSet<PathBuf>,
     pub(crate) items: Vec<Item>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) dirs: Vec<(PathBuf, String)>,
@@ -96,31 +98,26 @@ pub struct App {
     pub(crate) started: Instant,
 }
 
-fn spawn_scan(root: &Path) -> (Receiver<Msg>, Arc<AtomicBool>) {
-    let (tx, rx) = mpsc::channel();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let (root, flag) = (root.to_path_buf(), cancel.clone());
-    thread::spawn(move || scan::scan(root, tx, flag));
-    (rx, cancel)
-}
-
 impl Drop for App {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        if let Some(scanner) = &self.scanner {
+            scanner.stop();
+        }
     }
 }
 
 impl App {
     pub fn new(root: PathBuf) -> Self {
-        let (rx, cancel) = spawn_scan(&root);
-        let mut app = Self::build(root, rx, cancel, true);
+        let (tx, rx) = mpsc::channel();
+        let scanner = Scanner::start(root.clone(), tx);
+        let mut app = Self::build(root, rx, Some(scanner), true);
         app.refresh();
         app
     }
 
     pub fn with_items(root: PathBuf, items: Vec<Item>) -> Self {
         let (_tx, rx) = mpsc::channel();
-        let mut app = Self::build(root, rx, Arc::new(AtomicBool::new(false)), false);
+        let mut app = Self::build(root, rx, None, false);
         app.items = items;
         app.refresh();
         app
@@ -161,13 +158,15 @@ impl App {
             .join("\n")
     }
 
-    fn build(root: PathBuf, rx: Receiver<Msg>, cancel: Arc<AtomicBool>, scanning: bool) -> Self {
+    fn build(root: PathBuf, rx: Receiver<Msg>, scanner: Option<Scanner>, scanning: bool) -> Self {
         Self {
             dirs: list_dirs(&root),
             cwd: root.clone(),
             root,
             rx,
-            cancel,
+            scanner,
+            base_pending: false,
+            pending_children: HashSet::new(),
             items: Vec::new(),
             entries: Vec::new(),
             selected: HashSet::new(),
@@ -197,8 +196,7 @@ impl App {
                         self.items.push(item);
                     }
                 }
-                Msg::Progress(n) => self.visited = n,
-                Msg::Done => self.scanning = false,
+                Msg::Progress(_) | Msg::Done => {}
             }
         }
     }
@@ -209,24 +207,26 @@ impl App {
         self.refresh();
     }
 
-    fn rescan(&mut self, root: PathBuf, focus: Option<PathBuf>) {
-        self.cancel.store(true, Ordering::Relaxed);
-        let (rx, cancel) = spawn_scan(&root);
-        self.rx = rx;
-        self.cancel = cancel;
-        self.dirs = list_dirs(&root);
-        self.cwd = root.clone();
-        self.root = root;
-        self.items.clear();
-        self.entries.clear();
-        self.selected.clear();
-        self.cursor = 0;
-        self.focus = focus;
-        self.scanning = true;
-        self.visited = 0;
+    pub(crate) fn view_complete(&self) -> bool {
+        !self.base_pending && self.pending_children.is_empty()
+    }
+
+    pub(crate) fn entry_pending(&self, entry: &Entry) -> bool {
+        self.base_pending || self.pending_children.contains(&entry.path)
+    }
+
+    fn sync_progress(&mut self) {
+        if let Some(scanner) = &self.scanner {
+            let progress = scanner.progress(&self.cwd);
+            self.base_pending = progress.base_pending;
+            self.pending_children = progress.pending_children;
+            self.visited = progress.visited;
+            self.scanning = progress.running;
+        }
     }
 
     pub(crate) fn refresh(&mut self) {
+        self.sync_progress();
         let keep = self.focus.take().or_else(|| self.entries.get(self.cursor).map(|e| e.path.clone()));
         self.entries = build_entries(&self.items, &self.cwd, &self.dirs);
         self.cursor = keep
@@ -265,6 +265,12 @@ impl App {
         self.cursor = (self.cursor as isize + delta).clamp(0, max) as usize;
     }
 
+    fn prioritize_view(&self) {
+        if let Some(scanner) = &self.scanner {
+            scanner.prioritize(&self.cwd);
+        }
+    }
+
     fn enter(&mut self) {
         let Some(entry) = self.entries.get(self.cursor) else { return };
         if entry.is_waste() {
@@ -274,11 +280,8 @@ impl App {
         let path = entry.path.clone();
         self.selected.clear();
         self.cursor = 0;
-        if self.scanning {
-            self.rescan(path, None);
-        } else {
-            self.set_cwd(path);
-        }
+        self.set_cwd(path);
+        self.prioritize_view();
     }
 
     fn up(&mut self) {
@@ -286,12 +289,21 @@ impl App {
         self.selected.clear();
         if self.cwd == self.root {
             match self.root.parent().map(Path::to_path_buf) {
-                Some(parent) => self.rescan(parent, Some(came_from)),
+                Some(parent) => {
+                    let old_root = std::mem::replace(&mut self.root, parent.clone());
+                    self.set_cwd(parent.clone());
+                    self.cursor = 0;
+                    self.focus = Some(came_from);
+                    if let Some(scanner) = &self.scanner {
+                        scanner.extend(parent, old_root);
+                    }
+                }
                 None => self.status = "Already at the filesystem root".into(),
             }
         } else if let Some(parent) = self.cwd.parent() {
             self.set_cwd(parent.to_path_buf());
             self.focus = Some(came_from);
+            self.prioritize_view();
         }
     }
 
