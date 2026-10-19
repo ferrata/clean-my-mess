@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::App,
+    app::{App, Choice},
     format::{human, plural, spinner, truncate},
     theme::{kind_color, BACKDROP, MUTED, SHADOW},
     ui::{bars::stacked_bar, legend::legend},
@@ -80,12 +80,24 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
     }
     lines.extend([
         Line::raw(""),
-        Line::styled("This cannot be undone.", Style::new().fg(Color::Indexed(167)).italic()).centered(),
+        match app.choice {
+            Choice::Trash => Line::styled(
+                "Moves to the Trash. Space is freed when you empty it.",
+                Style::new().fg(Color::Indexed(110)).italic(),
+            ),
+            Choice::Delete => {
+                Line::styled("Deletes for good. This cannot be undone.", Style::new().fg(Color::Indexed(167)).italic())
+            }
+            Choice::Cancel => Line::styled("Nothing will be removed.", dim.italic()),
+        }
+        .centered(),
         Line::raw(""),
         Line::from(vec![
-            button(" y  Delete ", app.delete_focused, Color::Indexed(167)),
-            Span::raw("    "),
-            button(" esc  Cancel ", !app.delete_focused, Color::Indexed(110)),
+            button(" t  Trash ", app.choice == Choice::Trash, Color::Indexed(110)),
+            Span::raw("   "),
+            button(" y  Delete forever ", app.choice == Choice::Delete, Color::Indexed(167)),
+            Span::raw("   "),
+            button(" esc  Cancel ", app.choice == Choice::Cancel, MUTED),
         ])
         .centered(),
         Line::raw(""),
@@ -130,7 +142,16 @@ pub(crate) fn progress_popup(f: &mut Frame, app: &App) {
     let lines = vec![
         Line::from(vec![
             Span::styled(format!("{} ", spinner(app.started)), Style::new().fg(accent)),
-            Span::styled(if job.stopped { "Stopping" } else { "Deleting" }, Style::new().bold()),
+            Span::styled(
+                if job.stopped {
+                    "Stopping"
+                } else if job.permanent {
+                    "Deleting"
+                } else {
+                    "Moving to Trash"
+                },
+                Style::new().bold(),
+            ),
             Span::styled(format!("  ·  {:.0}%", ratio * 100.0), dim),
         ])
         .centered(),
@@ -149,7 +170,7 @@ pub(crate) fn progress_popup(f: &mut Frame, app: &App) {
         Line::raw(""),
         Line::from(button(stop, !job.stopped, Color::Indexed(110))).centered(),
     ];
-    draw_popup(f, lines, width, " Deleting ");
+    draw_popup(f, lines, width, if job.permanent { " Deleting " } else { " Moving to Trash " });
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

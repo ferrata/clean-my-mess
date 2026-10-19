@@ -31,7 +31,33 @@ pub(crate) enum Mode {
     Deleting,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Trash,
+    Delete,
+    Cancel,
+}
+
+impl Choice {
+    fn next(self) -> Self {
+        match self {
+            Self::Trash => Self::Delete,
+            Self::Delete => Self::Cancel,
+            Self::Cancel => Self::Trash,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Trash => Self::Cancel,
+            Self::Delete => Self::Trash,
+            Self::Cancel => Self::Delete,
+        }
+    }
+}
+
 pub(crate) struct DeleteJob {
+    pub(crate) permanent: bool,
     pub(crate) rx: Receiver<delete::Msg>,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) paths: HashSet<PathBuf>,
@@ -57,7 +83,9 @@ pub struct App {
     pub(crate) cursor: usize,
     pub(crate) focus: Option<PathBuf>,
     pub(crate) mode: Mode,
-    pub(crate) delete_focused: bool,
+    pub(crate) choice: Choice,
+    pub(crate) trash_dir: Option<PathBuf>,
+    pub(crate) trashed: u64,
     pub(crate) job: Option<DeleteJob>,
     pub(crate) gone: HashSet<PathBuf>,
     pub(crate) scanning: bool,
@@ -111,8 +139,12 @@ impl App {
         matches!(self.mode, Mode::Confirm | Mode::Deleting)
     }
 
-    pub fn delete_focused(&self) -> bool {
-        self.delete_focused
+    pub fn choice(&self) -> Choice {
+        self.choice
+    }
+
+    pub fn set_trash_dir(&mut self, dir: Option<PathBuf>) {
+        self.trash_dir = dir;
     }
 
     pub fn render_buffer(&self, width: u16, height: u16) -> Buffer {
@@ -142,7 +174,9 @@ impl App {
             cursor: 0,
             focus: None,
             mode: Mode::Normal,
-            delete_focused: false,
+            choice: Choice::Cancel,
+            trash_dir: delete::default_trash_dir(),
+            trashed: 0,
             job: None,
             gone: HashSet::new(),
             scanning,
@@ -261,7 +295,19 @@ impl App {
         }
     }
 
-    fn confirm_delete(&mut self) {
+    fn confirm_delete(&mut self, permanent: bool) {
+        let mode = if permanent {
+            delete::Mode::Permanent
+        } else {
+            match self.trash_dir.clone() {
+                Some(dir) => delete::Mode::Trash(dir),
+                None => {
+                    self.status = "Moving to Trash isn't supported on this platform — use permanent delete".into();
+                    self.mode = Mode::Normal;
+                    return;
+                }
+            }
+        };
         let target_paths: Vec<PathBuf> = self.targets().iter().map(|e| e.path.clone()).collect();
         let doomed: Vec<(PathBuf, u64)> = self
             .items
@@ -276,9 +322,10 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
-        let paths: Vec<PathBuf> = doomed.iter().map(|(p, _)| p.clone()).collect();
-        thread::spawn(move || delete::run(paths, tx, flag));
+        let work = doomed.clone();
+        thread::spawn(move || delete::run(work, mode, tx, flag));
         self.job = Some(DeleteJob {
+            permanent,
             rx,
             cancel,
             total_bytes: doomed.iter().map(|(_, s)| s).sum(),
@@ -303,16 +350,20 @@ impl App {
                 delete::Msg::Start(path) => job.current = path,
                 delete::Msg::Bytes(n) => job.done_bytes += n,
                 delete::Msg::Failed(e) => job.failed.push(e),
-                delete::Msg::Item { path, freed, complete } => {
-                    job.freed += freed;
-                    self.freed += freed;
+                delete::Msg::Item { path, bytes, complete } => {
+                    job.freed += bytes;
+                    if job.permanent {
+                        self.freed += bytes;
+                    } else {
+                        self.trashed += bytes;
+                    }
                     if complete {
                         job.done_items += 1;
                         job.paths.remove(&path);
                         self.items.retain(|i| i.path != path);
                         self.gone.insert(path);
                     } else if let Some(item) = self.items.iter_mut().find(|i| i.path == path) {
-                        item.size = item.size.saturating_sub(freed);
+                        item.size = item.size.saturating_sub(bytes);
                     }
                 }
                 delete::Msg::Done => finished = true,
@@ -323,13 +374,16 @@ impl App {
         }
         let Some(job) = self.job.take() else { return };
         self.dirs = list_dirs(&self.cwd);
-        let freed = human(job.freed);
+        let size = human(job.freed);
+        let (done, action) = if job.permanent { ("freed", "Deleted") } else { ("moved", "Moved to Trash:") };
         self.status = if !job.failed.is_empty() {
-            format!("Freed {freed}, {} failed: {}", job.failed.len(), job.failed[0])
+            format!("{size} {done}, {} failed: {}", job.failed.len(), job.failed[0])
         } else if job.stopped {
-            format!("Stopped after {}, freed {freed}", plural(job.done_items, "folder"))
+            format!("Stopped after {}, {size} {done}", plural(job.done_items, "folder"))
+        } else if job.permanent {
+            format!("{action} {}, freed {size}", plural(job.done_items, "folder"))
         } else {
-            format!("Deleted {}, freed {freed}", plural(job.done_items, "folder"))
+            format!("{action} {} ({size}) — space is freed when you empty the Trash", plural(job.done_items, "folder"))
         };
         self.mode = Mode::Normal;
     }
@@ -346,12 +400,16 @@ impl App {
         }
         match self.mode {
             Mode::Confirm => match code {
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('h' | 'l') => {
-                    self.delete_focused = !self.delete_focused;
-                }
-                KeyCode::Char('y') => self.confirm_delete(),
-                KeyCode::Enter | KeyCode::Char(' ') if self.delete_focused => self.confirm_delete(),
-                KeyCode::Enter | KeyCode::Char(' ' | 'n' | 'q') | KeyCode::Esc => self.cancel_delete(),
+                KeyCode::Right | KeyCode::Tab | KeyCode::Char('l') => self.choice = self.choice.next(),
+                KeyCode::Left | KeyCode::BackTab | KeyCode::Char('h') => self.choice = self.choice.prev(),
+                KeyCode::Char('t') => self.confirm_delete(false),
+                KeyCode::Char('y') => self.confirm_delete(true),
+                KeyCode::Enter | KeyCode::Char(' ') => match self.choice {
+                    Choice::Trash => self.confirm_delete(false),
+                    Choice::Delete => self.confirm_delete(true),
+                    Choice::Cancel => self.cancel_delete(),
+                },
+                KeyCode::Char('n' | 'q') | KeyCode::Esc => self.cancel_delete(),
                 _ => {}
             },
             Mode::Deleting => {
@@ -388,7 +446,7 @@ impl App {
                     KeyCode::Char('n') => self.selected.clear(),
                     KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete => {
                         if !self.targets().is_empty() {
-                            self.delete_focused = false;
+                            self.choice = Choice::Cancel;
                             self.mode = Mode::Confirm;
                         } else if self.entries.get(self.cursor).is_some() {
                             self.status = "No waste found there — nothing to delete".into();

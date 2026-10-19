@@ -14,7 +14,7 @@ use ratatui::{
     DefaultTerminal,
 };
 
-pub use app::App;
+pub use app::{App, Choice};
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     while !app.quit {

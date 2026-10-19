@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clean_my_mess::{scan::Item, App};
+use clean_my_mess::{scan::Item, App, Choice};
 use ratatui::{crossterm::event::KeyCode, style::Color};
 
 const KIB: u64 = 1024;
@@ -90,10 +90,14 @@ fn dialog_opens_with_cancel_focused() {
     let mut app = sample();
     app.press(KeyCode::Char('d'));
     assert!(app.dialog_open());
-    assert!(!app.delete_focused());
+    assert_eq!(app.choice(), Choice::Cancel);
     let screen = app.render(100, 30);
     assert!(screen.contains("Delete waste"), "{screen}");
-    assert!(screen.contains("This cannot be undone"));
+    assert!(screen.contains("Nothing will be removed"));
+    assert!(
+        screen.contains("t  Trash") && screen.contains("y  Delete forever") && screen.contains("esc  Cancel"),
+        "{screen}"
+    );
     assert!(screen.contains("1 waste folder"));
     assert!(screen.contains("9.0 MB"));
 }
@@ -108,18 +112,25 @@ fn dialog_totals_cover_the_whole_subtree() {
 }
 
 #[test]
-fn arrows_switch_buttons_without_navigating() {
+fn arrows_cycle_through_the_three_buttons_without_navigating() {
     let mut app = sample();
-    press(&mut app, &[KeyCode::Char('d'), KeyCode::Right]);
-    assert!(app.dialog_open());
-    assert!(app.delete_focused());
+    app.press(KeyCode::Char('d'));
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        app.press(KeyCode::Right);
+        seen.push(app.choice());
+        assert!(app.dialog_open());
+    }
+    assert_eq!(seen, vec![Choice::Trash, Choice::Delete, Choice::Cancel]);
 
     app.press(KeyCode::Left);
-    assert!(app.dialog_open());
-    assert!(!app.delete_focused());
+    assert_eq!(app.choice(), Choice::Delete);
 
     let screen = app.render(100, 30);
+    assert!(screen.contains("Deletes for good"), "{screen}");
     assert!(!screen.contains("/proj/b"), "arrows must not change directory:\n{screen}");
+    app.press(KeyCode::Left);
+    assert!(app.render(100, 30).contains("Moves to the Trash"));
 }
 
 #[test]
@@ -131,7 +142,7 @@ fn unrelated_keys_do_not_close_the_dialog() {
 
 #[test]
 fn enter_on_default_focus_and_esc_both_cancel() {
-    for key in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n')] {
+    for key in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char(' ')] {
         let mut app = sample();
         press(&mut app, &[KeyCode::Char('d'), key]);
         assert!(!app.dialog_open(), "{key:?} should close the dialog");
@@ -208,7 +219,7 @@ fn dialog_legend_wraps_and_folds() {
     app.press(KeyCode::Char('d'));
     let screen = app.render(100, 40);
     assert!(screen.contains("other ("), "{screen}");
-    assert!(screen.contains("y  Delete") && screen.contains("esc  Cancel"), "buttons must stay visible:\n{screen}");
+    assert!(screen.contains("t  Trash") && screen.contains("esc  Cancel"), "buttons must stay visible:\n{screen}");
 }
 
 fn bar_colors(app: &App, name: &str) -> Vec<Color> {
@@ -260,4 +271,15 @@ fn tiny_terminals_do_not_panic() {
         app.press(KeyCode::Right);
         app.render(w, h);
     }
+}
+
+#[test]
+fn trash_is_refused_when_unavailable_and_nothing_changes() {
+    let mut app = sample();
+    app.set_trash_dir(None);
+    press(&mut app, &[KeyCode::Char('d'), KeyCode::Char('t')]);
+    assert!(!app.dialog_open());
+    let screen = app.render(140, 24);
+    assert!(screen.contains("Moving to Trash isn't supported"), "{screen}");
+    assert!(screen.contains("4 waste folders here"));
 }
