@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clean_my_mess::{scan::Item, App};
-use ratatui::crossterm::event::KeyCode;
+use ratatui::{crossterm::event::KeyCode, style::Color};
 
 const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
@@ -105,6 +105,50 @@ fn many_kinds() -> App {
         .map(|(i, kind)| item(&format!("/proj/p/dir{i}"), kind, (20 - i as u64) * MIB))
         .collect();
     App::with_items(PathBuf::from("/proj"), items)
+}
+
+#[test]
+fn legend_folds_small_types_into_other_and_never_overflows() {
+    let app = many_kinds();
+    let mut markers = Vec::new();
+    for width in [160u16, 120, 80, 56] {
+        let screen = app.render(width, 24);
+        let legend = screen.lines().nth(2).expect("legend line");
+        assert!(legend.contains("other ("), "width {width}: {legend}");
+        assert!(legend.chars().count() <= width as usize, "width {width}: {legend}");
+        markers.push(legend.matches('■').count());
+    }
+    assert!(markers.windows(2).all(|w| w[0] >= w[1]), "narrower screens show fewer types: {markers:?}");
+    assert!(markers[0] > markers[3], "{markers:?}");
+}
+
+fn bar_colors(app: &App, name: &str) -> Vec<Color> {
+    let buffer = app.render_buffer(100, 24);
+    let screen = app.render(100, 24);
+    let y = row_index(&screen, name) as u16;
+    let mut colors = Vec::new();
+    for x in 0..100 {
+        let cell = &buffer[(x, y)];
+        if cell.symbol() == "█" && !colors.contains(&cell.fg) {
+            colors.push(cell.fg);
+        }
+    }
+    colors
+}
+
+#[test]
+fn directory_bar_is_split_by_type() {
+    let app = App::with_items(
+        PathBuf::from("/proj"),
+        vec![
+            item("/proj/mixed/node_modules", "Node", 6 * MIB),
+            item("/proj/mixed/target", "Rust", 3 * MIB),
+            item("/proj/mixed/.next", "Next.js", 3 * MIB),
+            item("/proj/pure/node_modules", "Node", 2 * MIB),
+        ],
+    );
+    assert_eq!(bar_colors(&app, "mixed/").len(), 3);
+    assert_eq!(bar_colors(&app, "pure/").len(), 1);
 }
 
 #[test]

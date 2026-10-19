@@ -215,4 +215,16 @@ impl App {
             _ => {}
         }
     }
+
+    pub(crate) fn kind_totals(&self) -> Vec<(&'static str, u64)> {
+        let mut totals: Vec<(&'static str, u64)> = Vec::new();
+        for item in self.scope_items() {
+            match totals.iter_mut().find(|(k, _)| *k == item.kind) {
+                Some(slot) => slot.1 += item.size,
+                None => totals.push((item.kind, item.size)),
+            }
+        }
+        totals.sort_by(|a, b| b.1.cmp(&a.1));
+        totals
+    }
 }

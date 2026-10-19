@@ -1,5 +1,6 @@
 mod bars;
 mod footer;
+mod legend;
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -14,11 +15,27 @@ use crate::{
     format::{human, plural, spinner},
     theme::{kind_color, BAR_WIDTH, MUTED},
 };
-use bars::smooth_bar;
+use bars::{split_bar, stacked_bar};
 use footer::footer_line;
+use legend::legend;
 
 pub(crate) fn draw(f: &mut Frame, app: &App) {
-    let [body, footer_area] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
+    let [header, body, footer_area] =
+        Layout::vertical([Constraint::Length(4), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
+
+    let totals = app.kind_totals();
+    let scan_state = if app.scanning {
+        format!("{} scanning… {} dirs", spinner(app.started), app.visited)
+    } else {
+        "scan done".into()
+    };
+    let block = Block::bordered().title(format!(" {} · {} ", app.cwd.display(), scan_state));
+    let inner = block.inner(header);
+    f.render_widget(block, header);
+    let (legend_lines, bar_totals) = legend(&totals, inner.width as usize, 1);
+    let mut header_lines = vec![stacked_bar(&bar_totals, inner.width as usize)];
+    header_lines.extend(legend_lines);
+    f.render_widget(Paragraph::new(header_lines), inner);
 
     let max = app.entries.first().map(|e| e.size).unwrap_or(1).max(1);
     let rows: Vec<ListItem> = app
@@ -40,7 +57,8 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
             };
             let name_style = if entry.is_waste() { Style::new() } else { Style::new().bold() };
             let label_style = if entry.is_waste() { Style::new().fg(kind_color(kind)) } else { Style::new().fg(MUTED) };
-            let mut spans = smooth_bar(entry.size as f64 / max as f64, BAR_WIDTH, kind_color(kind));
+            let mut spans = Vec::new();
+            spans.extend(split_bar(entry.size as f64 / max as f64, BAR_WIDTH, &entry.by_kind));
             spans.extend([
                 Span::raw(format!(" {:>9}  ", human(entry.size))),
                 Span::styled(format!("{label:<14} "), label_style),
@@ -50,18 +68,7 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
         })
         .collect();
     let scope_total: u64 = app.scope_items().map(|i| i.size).sum();
-    let scan_state = if app.scanning {
-        format!("{} scanning… {} dirs", spinner(app.started), app.visited)
-    } else {
-        "scan done".into()
-    };
-    let title = format!(
-        " {} · {} · {} here · {} ",
-        app.cwd.display(),
-        scan_state,
-        plural(app.scope_items().count(), "waste folder"),
-        human(scope_total),
-    );
+    let title = format!(" {} here · {} ", plural(app.scope_items().count(), "waste folder"), human(scope_total),);
     let list = List::new(rows)
         .block(Block::bordered().title(title))
         .highlight_symbol("▶ ")
