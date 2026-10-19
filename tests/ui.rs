@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use clean_my_mess::{scan::Item, App, Choice};
+use std::time::Duration;
+
+use clean_my_mess::{estimate_remaining, format_duration, scan::Item, App, Choice};
 use ratatui::{crossterm::event::KeyCode, style::Color};
 
 const KIB: u64 = 1024;
@@ -396,4 +398,41 @@ fn folder_you_came_from_stays_finished_when_you_go_above_the_scan_root() {
     let screen = app.render(120, 24);
     assert!(screen.contains("/proj "), "should now be viewing /proj:\n{screen}");
     assert!(!has_spinner(row(&screen, "a/")), "a/ was already finished, it must not start spinning again:\n{screen}");
+}
+
+#[test]
+fn durations_are_formatted_compactly() {
+    let f = |secs: f64| format_duration(Duration::from_secs_f64(secs));
+    assert_eq!(f(0.0), "<1s");
+    assert_eq!(f(0.2), "1s");
+    assert_eq!(f(42.0), "42s");
+    assert_eq!(f(60.0), "1m 00s");
+    assert_eq!(f(125.0), "2m 05s");
+    assert_eq!(f(3.0 * 3600.0 + 7.0 * 60.0), "3h 07m");
+}
+
+#[test]
+fn remaining_time_is_extrapolated_from_progress_and_withheld_when_unreliable() {
+    let secs = |s: u64| Duration::from_secs(s);
+    assert_eq!(estimate_remaining(50, 100, secs(10)), Some(secs(10)));
+    assert_eq!(estimate_remaining(25, 100, secs(5)), Some(secs(15)));
+    assert_eq!(estimate_remaining(100, 100, secs(8)), Some(secs(0)));
+    assert_eq!(estimate_remaining(50, 100, Duration::from_millis(900)), None, "too early to trust");
+    assert_eq!(estimate_remaining(0, 100, secs(10)), None, "no progress yet");
+}
+
+#[test]
+fn dialog_estimates_from_the_last_measured_delete_speed() {
+    let mut app = sample();
+    app.press(KeyCode::Down);
+    app.press(KeyCode::Char('d'));
+    let before = app.render(110, 34);
+    assert!(before.contains("Trash instant") && before.contains("shown once it starts"), "{before}");
+    assert!(before.contains("t  Trash"), "buttons must stay visible:\n{before}");
+    app.press(KeyCode::Esc);
+
+    app.set_last_delete_rate(Some(MIB as f64));
+    app.press(KeyCode::Char('d'));
+    let after = app.render(110, 34);
+    assert!(after.contains("Delete forever ~4s"), "4 MiB at 1 MiB/s:\n{after}");
 }

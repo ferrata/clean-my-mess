@@ -15,6 +15,7 @@ use ratatui::{
 };
 
 pub use app::{App, Choice};
+pub use format::{estimate_remaining, format_duration};
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> io::Result<()> {
     while !app.quit {

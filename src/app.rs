@@ -69,6 +69,7 @@ pub(crate) struct DeleteJob {
     pub(crate) current: PathBuf,
     pub(crate) failed: Vec<String>,
     pub(crate) stopped: bool,
+    pub(crate) started: Instant,
 }
 
 pub struct App {
@@ -89,6 +90,7 @@ pub struct App {
     pub(crate) choice: Choice,
     pub(crate) trash_dir: Option<PathBuf>,
     pub(crate) trashed: u64,
+    pub(crate) last_rate: Option<f64>,
     pub(crate) job: Option<DeleteJob>,
     pub(crate) gone: HashSet<PathBuf>,
     pub(crate) scanning: bool,
@@ -146,6 +148,11 @@ impl App {
         matches!(self.mode, Mode::Confirm | Mode::Deleting)
     }
 
+    #[doc(hidden)]
+    pub fn set_last_delete_rate(&mut self, bytes_per_sec: Option<f64>) {
+        self.last_rate = bytes_per_sec;
+    }
+
     pub fn choice(&self) -> Choice {
         self.choice
     }
@@ -187,6 +194,7 @@ impl App {
             choice: Choice::Cancel,
             trash_dir: delete::default_trash_dir(),
             trashed: 0,
+            last_rate: None,
             job: None,
             gone: HashSet::new(),
             scanning,
@@ -366,6 +374,7 @@ impl App {
             current: PathBuf::new(),
             failed: Vec::new(),
             stopped: false,
+            started: Instant::now(),
         });
         self.selected.retain(|p| !target_paths.iter().any(|t| p.starts_with(t)));
         self.mode = Mode::Deleting;
@@ -402,6 +411,10 @@ impl App {
             return;
         }
         let Some(job) = self.job.take() else { return };
+        let secs = job.started.elapsed().as_secs_f64();
+        if job.permanent && !job.stopped && job.failed.is_empty() && secs >= 1.0 && job.done_bytes > 0 {
+            self.last_rate = Some(job.done_bytes as f64 / secs);
+        }
         self.dirs = list_dirs(&self.cwd);
         let size = human(job.freed);
         let (done, action) = if job.permanent { ("freed", "Deleted") } else { ("moved", "Moved to Trash:") };

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style, Stylize},
@@ -8,7 +10,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Choice},
-    format::{human, plural, spinner, truncate},
+    format::{estimate_remaining, format_duration, human, plural, spinner, truncate},
     theme::{kind_color, BACKDROP, MUTED, SHADOW},
     ui::{bars::stacked_bar, legend::legend},
 };
@@ -57,7 +59,16 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
     lines.extend(legend_lines);
     lines.push(Line::raw(""));
     let unfinished = targets.iter().any(|e| app.entry_pending(e));
-    let capacity = (f.area().height as usize).saturating_sub(13 + legend_height + usize::from(unfinished)).clamp(2, 6);
+    let capacity = (f.area().height as usize).saturating_sub(14 + legend_height + usize::from(unfinished)).clamp(2, 6);
+    let estimate_line = match app.last_rate {
+        Some(rate) if rate > 0.0 => {
+            format!(
+                "Estimate: Trash instant  ·  Delete forever ~{}",
+                format_duration(Duration::from_secs_f64(size as f64 / rate))
+            )
+        }
+        _ => "Estimate: Trash instant  ·  Delete forever: shown once it starts".to_string(),
+    };
     let shown = if targets.len() > capacity { capacity - 1 } else { targets.len() };
     for entry in targets.iter().take(shown) {
         let kind = entry.kind.unwrap_or_else(|| entry.dominant());
@@ -93,7 +104,7 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
         Line::raw(""),
         match app.choice {
             Choice::Trash => Line::styled(
-                "Moves to the Trash. Space is freed when you empty it.",
+                "Moves to the Trash instantly. Space is freed when you empty it.",
                 Style::new().fg(Color::Indexed(110)).italic(),
             ),
             Choice::Delete => {
@@ -102,6 +113,7 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
             Choice::Cancel => Line::styled("Nothing will be removed.", dim.italic()),
         }
         .centered(),
+        Line::styled(estimate_line, dim).centered(),
         Line::raw(""),
         Line::from(vec![
             button(" t  Trash ", app.choice == Choice::Trash, Color::Indexed(110)),
@@ -147,6 +159,15 @@ pub(crate) fn progress_popup(f: &mut Frame, app: &App) {
         Span::styled("█".repeat(filled), Style::new().fg(accent)),
         Span::styled("░".repeat(inner_width - filled), Style::new().fg(Color::Indexed(240))),
     ]);
+    let elapsed = job.started.elapsed();
+    let timing = if job.permanent && !job.stopped {
+        match estimate_remaining(job.done_bytes.min(job.total_bytes), job.total_bytes, elapsed) {
+            Some(left) => format!("{} elapsed  ·  ~{} left", format_duration(elapsed), format_duration(left)),
+            None => format!("{} elapsed  ·  estimating…", format_duration(elapsed)),
+        }
+    } else {
+        format!("{} elapsed", format_duration(elapsed))
+    };
     let current = job.current.strip_prefix(&app.cwd).unwrap_or(&job.current).display().to_string();
     let stop = if job.stopped { " stopping… " } else { " esc  Stop " };
 
@@ -177,6 +198,7 @@ pub(crate) fn progress_popup(f: &mut Frame, app: &App) {
             plural(job.total_items, "folder"),
         ))
         .centered(),
+        Line::styled(timing, dim).centered(),
         Line::styled(truncate(&current, inner_width), dim).centered(),
         Line::raw(""),
         Line::from(button(stop, !job.stopped, Color::Indexed(110))).centered(),
