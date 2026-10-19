@@ -85,6 +85,86 @@ fn waste_folder_itself_cannot_be_opened() {
     assert!(screen.contains("This is a waste folder itself"), "{screen}");
 }
 
+#[test]
+fn dialog_opens_with_cancel_focused() {
+    let mut app = sample();
+    app.press(KeyCode::Char('d'));
+    assert!(app.dialog_open());
+    assert!(!app.delete_focused());
+    let screen = app.render(100, 30);
+    assert!(screen.contains("Delete waste"), "{screen}");
+    assert!(screen.contains("This cannot be undone"));
+    assert!(screen.contains("1 waste folder"));
+    assert!(screen.contains("9.0 MB"));
+}
+
+#[test]
+fn dialog_totals_cover_the_whole_subtree() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Down, KeyCode::Char('d')]);
+    let screen = app.render(100, 30);
+    assert!(screen.contains("2 waste folders"), "{screen}");
+    assert!(screen.contains("4.0 MB"));
+}
+
+#[test]
+fn arrows_switch_buttons_without_navigating() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Char('d'), KeyCode::Right]);
+    assert!(app.dialog_open());
+    assert!(app.delete_focused());
+
+    app.press(KeyCode::Left);
+    assert!(app.dialog_open());
+    assert!(!app.delete_focused());
+
+    let screen = app.render(100, 30);
+    assert!(!screen.contains("/proj/b"), "arrows must not change directory:\n{screen}");
+}
+
+#[test]
+fn unrelated_keys_do_not_close_the_dialog() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Char('d'), KeyCode::Char('x'), KeyCode::Char('j'), KeyCode::Down]);
+    assert!(app.dialog_open());
+}
+
+#[test]
+fn enter_on_default_focus_and_esc_both_cancel() {
+    for key in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n')] {
+        let mut app = sample();
+        press(&mut app, &[KeyCode::Char('d'), key]);
+        assert!(!app.dialog_open(), "{key:?} should close the dialog");
+        let screen = app.render(100, 24);
+        assert!(screen.contains("Deletion cancelled"), "{screen}");
+        assert!(screen.contains("4 waste folders here"), "nothing may be removed:\n{screen}");
+    }
+}
+
+#[test]
+fn space_marks_and_footer_reflects_selection() {
+    let mut app = sample();
+    app.press(KeyCode::Char(' '));
+    assert!(app.render(120, 24).contains("delete 1 marked"));
+
+    app.press(KeyCode::Char('a'));
+    assert!(app.render(120, 24).contains("delete 3 marked"));
+
+    app.press(KeyCode::Char('n'));
+    let screen = app.render(120, 24);
+    assert!(screen.contains("0 marked (0 B)"), "{screen}");
+    assert!(!screen.contains("delete 3 marked"), "{screen}");
+    assert!(screen.contains("delete all waste under"));
+}
+
+#[test]
+fn footer_describes_what_d_will_do() {
+    let mut app = sample();
+    assert!(app.render(120, 24).contains("delete all waste under b/ (1 folder"));
+    press(&mut app, &[KeyCode::Right]);
+    assert!(app.render(120, 24).contains("delete this Rust folder"));
+}
+
 fn many_kinds() -> App {
     let kinds = [
         "Node",
@@ -120,6 +200,15 @@ fn legend_folds_small_types_into_other_and_never_overflows() {
     }
     assert!(markers.windows(2).all(|w| w[0] >= w[1]), "narrower screens show fewer types: {markers:?}");
     assert!(markers[0] > markers[3], "{markers:?}");
+}
+
+#[test]
+fn dialog_legend_wraps_and_folds() {
+    let mut app = many_kinds();
+    app.press(KeyCode::Char('d'));
+    let screen = app.render(100, 40);
+    assert!(screen.contains("other ("), "{screen}");
+    assert!(screen.contains("y  Delete") && screen.contains("esc  Cancel"), "buttons must stay visible:\n{screen}");
 }
 
 fn bar_colors(app: &App, name: &str) -> Vec<Color> {

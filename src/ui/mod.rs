@@ -1,6 +1,7 @@
 mod bars;
 mod footer;
 mod legend;
+mod popup;
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -11,13 +12,14 @@ use ratatui::{
 };
 
 use crate::{
-    app::App,
+    app::{App, Mode},
     format::{human, plural, spinner},
     theme::{kind_color, BAR_WIDTH, MUTED},
 };
 use bars::{split_bar, stacked_bar};
 use footer::footer_line;
 use legend::legend;
+use popup::{confirm_popup, progress_popup};
 
 pub(crate) fn draw(f: &mut Frame, app: &App) {
     let [header, body, footer_area] =
@@ -42,11 +44,13 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
         .entries
         .iter()
         .map(|entry| {
+            let mark = if app.selected.contains(&entry.path) { "[x]" } else { "[ ]" };
             let kind = entry.kind.unwrap_or_else(|| entry.dominant());
             if entry.count == 0 {
                 let label = if app.scanning { format!("{} scanning…", spinner(app.started)) } else { "clean".into() };
                 let dim = Style::new().fg(MUTED);
                 return ListItem::new(Line::from(vec![
+                    Span::raw(format!("{mark} ")),
                     Span::styled("·".repeat(BAR_WIDTH), dim),
                     Span::styled(format!(" {:>9}  {label:<14} {}/", "–", entry.name), dim),
                 ]));
@@ -57,7 +61,7 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
             };
             let name_style = if entry.is_waste() { Style::new() } else { Style::new().bold() };
             let label_style = if entry.is_waste() { Style::new().fg(kind_color(kind)) } else { Style::new().fg(MUTED) };
-            let mut spans = Vec::new();
+            let mut spans = vec![Span::raw(format!("{mark} "))];
             spans.extend(split_bar(entry.size as f64 / max as f64, BAR_WIDTH, &entry.by_kind));
             spans.extend([
                 Span::raw(format!(" {:>9}  ", human(entry.size))),
@@ -68,7 +72,14 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
         })
         .collect();
     let scope_total: u64 = app.scope_items().map(|i| i.size).sum();
-    let title = format!(" {} here · {} ", plural(app.scope_items().count(), "waste folder"), human(scope_total),);
+    let title = format!(
+        " {} here · {} · {} marked ({}) · {} freed ",
+        plural(app.scope_items().count(), "waste folder"),
+        human(scope_total),
+        app.selected.len(),
+        human(app.selected_size()),
+        human(app.freed),
+    );
     let list = List::new(rows)
         .block(Block::bordered().title(title))
         .highlight_symbol("▶ ")
@@ -79,4 +90,10 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
     }
     f.render_stateful_widget(list, body, &mut state);
     f.render_widget(Paragraph::new(footer_line(app)), footer_area);
+
+    match app.mode {
+        Mode::Confirm => confirm_popup(f, app),
+        Mode::Deleting => progress_popup(f, app),
+        Mode::Normal => {}
+    }
 }

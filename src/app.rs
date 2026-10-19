@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,10 +18,32 @@ use ratatui::{
 };
 
 use crate::{
+    delete,
+    format::{human, plural},
     scan::{self, Item, Msg},
     tree::{build_entries, list_dirs, Entry},
     ui,
 };
+
+pub(crate) enum Mode {
+    Normal,
+    Confirm,
+    Deleting,
+}
+
+pub(crate) struct DeleteJob {
+    pub(crate) rx: Receiver<delete::Msg>,
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) paths: HashSet<PathBuf>,
+    pub(crate) total_bytes: u64,
+    pub(crate) total_items: usize,
+    pub(crate) done_bytes: u64,
+    pub(crate) done_items: usize,
+    pub(crate) freed: u64,
+    pub(crate) current: PathBuf,
+    pub(crate) failed: Vec<String>,
+    pub(crate) stopped: bool,
+}
 
 pub struct App {
     pub(crate) root: PathBuf,
@@ -30,10 +53,16 @@ pub struct App {
     pub(crate) items: Vec<Item>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) dirs: Vec<(PathBuf, String)>,
+    pub(crate) selected: HashSet<PathBuf>,
     pub(crate) cursor: usize,
     pub(crate) focus: Option<PathBuf>,
+    pub(crate) mode: Mode,
+    pub(crate) delete_focused: bool,
+    pub(crate) job: Option<DeleteJob>,
+    pub(crate) gone: HashSet<PathBuf>,
     pub(crate) scanning: bool,
     pub(crate) visited: usize,
+    pub(crate) freed: u64,
     pub(crate) status: String,
     pub(crate) quit: bool,
     pub(crate) started: Instant,
@@ -78,6 +107,14 @@ impl App {
         self.scanning
     }
 
+    pub fn dialog_open(&self) -> bool {
+        matches!(self.mode, Mode::Confirm | Mode::Deleting)
+    }
+
+    pub fn delete_focused(&self) -> bool {
+        self.delete_focused
+    }
+
     pub fn render_buffer(&self, width: u16, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
         terminal.draw(|f| ui::draw(f, self)).expect("draw");
@@ -101,10 +138,16 @@ impl App {
             cancel,
             items: Vec::new(),
             entries: Vec::new(),
+            selected: HashSet::new(),
             cursor: 0,
             focus: None,
+            mode: Mode::Normal,
+            delete_focused: false,
+            job: None,
+            gone: HashSet::new(),
             scanning,
             visited: 0,
+            freed: 0,
             status: String::new(),
             quit: false,
             started: Instant::now(),
@@ -114,7 +157,12 @@ impl App {
     fn drain_scan(&mut self) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Msg::Found(item) => self.items.push(item),
+                Msg::Found(item) => {
+                    let busy = self.job.as_ref().is_some_and(|j| j.paths.contains(&item.path));
+                    if !busy && !self.gone.contains(&item.path) {
+                        self.items.push(item);
+                    }
+                }
                 Msg::Progress(n) => self.visited = n,
                 Msg::Done => self.scanning = false,
             }
@@ -123,6 +171,7 @@ impl App {
 
     pub fn pump(&mut self) {
         self.drain_scan();
+        self.drain_delete();
         self.refresh();
     }
 
@@ -136,6 +185,7 @@ impl App {
         self.root = root;
         self.items.clear();
         self.entries.clear();
+        self.selected.clear();
         self.cursor = 0;
         self.focus = focus;
         self.scanning = true;
@@ -154,10 +204,23 @@ impl App {
         self.items.iter().filter(|i| i.path.starts_with(&self.cwd))
     }
 
+    pub(crate) fn targets(&self) -> Vec<&Entry> {
+        let picked: Vec<&Entry> = if self.selected.is_empty() {
+            self.entries.get(self.cursor).into_iter().collect()
+        } else {
+            self.entries.iter().filter(|e| self.selected.contains(&e.path)).collect()
+        };
+        picked.into_iter().filter(|e| e.count > 0).collect()
+    }
+
     fn set_cwd(&mut self, path: PathBuf) {
         self.dirs = list_dirs(&path);
         self.cwd = path;
         self.entries.clear();
+    }
+
+    pub(crate) fn selected_size(&self) -> u64 {
+        self.entries.iter().filter(|e| self.selected.contains(&e.path)).map(|e| e.size).sum()
     }
 
     fn move_cursor(&mut self, delta: isize) {
@@ -171,10 +234,11 @@ impl App {
     fn enter(&mut self) {
         let Some(entry) = self.entries.get(self.cursor) else { return };
         if entry.is_waste() {
-            self.status = "This is a waste folder itself — there is nothing to open".into();
+            self.status = "This is a waste folder itself — press d to delete it".into();
             return;
         }
         let path = entry.path.clone();
+        self.selected.clear();
         self.cursor = 0;
         if self.scanning {
             self.rescan(path, None);
@@ -185,6 +249,7 @@ impl App {
 
     fn up(&mut self) {
         let came_from = self.cwd.clone();
+        self.selected.clear();
         if self.cwd == self.root {
             match self.root.parent().map(Path::to_path_buf) {
                 Some(parent) => self.rescan(parent, Some(came_from)),
@@ -196,23 +261,142 @@ impl App {
         }
     }
 
+    fn confirm_delete(&mut self) {
+        let target_paths: Vec<PathBuf> = self.targets().iter().map(|e| e.path.clone()).collect();
+        let doomed: Vec<(PathBuf, u64)> = self
+            .items
+            .iter()
+            .filter(|i| target_paths.iter().any(|t| i.path.starts_with(t)))
+            .map(|i| (i.path.clone(), i.size))
+            .collect();
+        if doomed.is_empty() {
+            self.mode = Mode::Normal;
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let paths: Vec<PathBuf> = doomed.iter().map(|(p, _)| p.clone()).collect();
+        thread::spawn(move || delete::run(paths, tx, flag));
+        self.job = Some(DeleteJob {
+            rx,
+            cancel,
+            total_bytes: doomed.iter().map(|(_, s)| s).sum(),
+            total_items: doomed.len(),
+            paths: doomed.into_iter().map(|(p, _)| p).collect(),
+            done_bytes: 0,
+            done_items: 0,
+            freed: 0,
+            current: PathBuf::new(),
+            failed: Vec::new(),
+            stopped: false,
+        });
+        self.selected.clear();
+        self.mode = Mode::Deleting;
+    }
+
+    fn drain_delete(&mut self) {
+        let mut finished = false;
+        while let Some(msg) = self.job.as_ref().and_then(|j| j.rx.try_recv().ok()) {
+            let Some(job) = self.job.as_mut() else { break };
+            match msg {
+                delete::Msg::Start(path) => job.current = path,
+                delete::Msg::Bytes(n) => job.done_bytes += n,
+                delete::Msg::Failed(e) => job.failed.push(e),
+                delete::Msg::Item { path, freed, complete } => {
+                    job.freed += freed;
+                    self.freed += freed;
+                    if complete {
+                        job.done_items += 1;
+                        job.paths.remove(&path);
+                        self.items.retain(|i| i.path != path);
+                        self.gone.insert(path);
+                    } else if let Some(item) = self.items.iter_mut().find(|i| i.path == path) {
+                        item.size = item.size.saturating_sub(freed);
+                    }
+                }
+                delete::Msg::Done => finished = true,
+            }
+        }
+        if !finished {
+            return;
+        }
+        let Some(job) = self.job.take() else { return };
+        self.dirs = list_dirs(&self.cwd);
+        let freed = human(job.freed);
+        self.status = if !job.failed.is_empty() {
+            format!("Freed {freed}, {} failed: {}", job.failed.len(), job.failed[0])
+        } else if job.stopped {
+            format!("Stopped after {}, freed {freed}", plural(job.done_items, "folder"))
+        } else {
+            format!("Deleted {}, freed {freed}", plural(job.done_items, "folder"))
+        };
+        self.mode = Mode::Normal;
+    }
+
+    fn cancel_delete(&mut self) {
+        self.status = "Deletion cancelled".into();
+        self.mode = Mode::Normal;
+    }
+
     pub(crate) fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) {
         if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
             self.quit = true;
             return;
         }
-        self.status.clear();
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_cursor(-1),
-            KeyCode::PageDown => self.move_cursor(10),
-            KeyCode::PageUp => self.move_cursor(-10),
-            KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
-            KeyCode::End | KeyCode::Char('G') => self.cursor = self.entries.len().saturating_sub(1),
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.enter(),
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => self.up(),
-            _ => {}
+        match self.mode {
+            Mode::Confirm => match code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('h' | 'l') => {
+                    self.delete_focused = !self.delete_focused;
+                }
+                KeyCode::Char('y') => self.confirm_delete(),
+                KeyCode::Enter | KeyCode::Char(' ') if self.delete_focused => self.confirm_delete(),
+                KeyCode::Enter | KeyCode::Char(' ' | 'n' | 'q') | KeyCode::Esc => self.cancel_delete(),
+                _ => {}
+            },
+            Mode::Deleting => {
+                if matches!(code, KeyCode::Esc | KeyCode::Char('q' | 's')) {
+                    if let Some(job) = self.job.as_mut() {
+                        job.stopped = true;
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+            Mode::Normal => {
+                self.status.clear();
+                match code {
+                    KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+                    KeyCode::Down | KeyCode::Char('j') => self.move_cursor(1),
+                    KeyCode::Up | KeyCode::Char('k') => self.move_cursor(-1),
+                    KeyCode::PageDown => self.move_cursor(10),
+                    KeyCode::PageUp => self.move_cursor(-10),
+                    KeyCode::Home | KeyCode::Char('g') => self.cursor = 0,
+                    KeyCode::End | KeyCode::Char('G') => self.cursor = self.entries.len().saturating_sub(1),
+                    KeyCode::Right | KeyCode::Char('l') | KeyCode::Enter => self.enter(),
+                    KeyCode::Left | KeyCode::Char('h') | KeyCode::Backspace => self.up(),
+                    KeyCode::Char(' ') => {
+                        if let Some(entry) = self.entries.get(self.cursor) {
+                            if !self.selected.remove(&entry.path) {
+                                self.selected.insert(entry.path.clone());
+                            }
+                            self.move_cursor(1);
+                        }
+                    }
+                    KeyCode::Char('a') => {
+                        self.selected = self.entries.iter().filter(|e| e.count > 0).map(|e| e.path.clone()).collect()
+                    }
+                    KeyCode::Char('n') => self.selected.clear(),
+                    KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete => {
+                        if !self.targets().is_empty() {
+                            self.delete_focused = false;
+                            self.mode = Mode::Confirm;
+                        } else if self.entries.get(self.cursor).is_some() {
+                            self.status = "No waste found there — nothing to delete".into();
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 

@@ -22,6 +22,8 @@ pub(crate) const KIND_COLORS: &[(&str, u8)] = &[
 ];
 
 pub(crate) const MUTED: Color = Color::Indexed(245);
+pub(crate) const BACKDROP: Color = Color::Indexed(240);
+pub(crate) const SHADOW: Color = Color::Indexed(233);
 
 pub(crate) const BAR_WIDTH: usize = 12;
 

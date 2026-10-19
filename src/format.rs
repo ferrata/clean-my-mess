@@ -27,3 +27,11 @@ pub(crate) fn plural(n: usize, word: &str) -> String {
         format!("{n} {word}s")
     }
 }
+
+pub(crate) fn truncate(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_string();
+    }
+    let head: String = name.chars().take(max.saturating_sub(1)).collect();
+    format!("{head}…")
+}

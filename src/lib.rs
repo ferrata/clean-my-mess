@@ -1,3 +1,4 @@
+pub mod delete;
 pub mod scan;
 
 mod app;
