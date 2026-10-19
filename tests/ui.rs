@@ -284,6 +284,61 @@ fn trash_is_refused_when_unavailable_and_nothing_changes() {
     assert!(screen.contains("4 waste folders here"));
 }
 
+#[test]
+fn marks_are_remembered_across_navigation_but_only_visible_ones_count() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Down, KeyCode::Char(' ')]);
+    assert!(app.render(140, 24).contains("1 marked (4.0 MB)"));
+
+    press(&mut app, &[KeyCode::Right]);
+    let inside = app.render(140, 24);
+    assert!(inside.contains("/proj/c"), "{inside}");
+    assert!(inside.contains("0 marked (0 B) +1 elsewhere"), "{inside}");
+    assert!(inside.contains("delete this Node folder"), "hidden marks must not drive the footer:\n{inside}");
+
+    app.press(KeyCode::Char('d'));
+    let dialog = app.render(140, 30);
+    assert!(dialog.contains("1 waste folder"), "only the visible folder is in the dialog:\n{dialog}");
+    assert!(dialog.contains("100.0 KB") && !dialog.contains("4.0 MB"), "{dialog}");
+    app.press(KeyCode::Esc);
+
+    app.press(KeyCode::Left);
+    let back = app.render(140, 24);
+    assert!(back.contains("1 marked (4.0 MB)") && !back.contains("elsewhere"), "{back}");
+    assert!(back.contains("delete 1 marked (4.0 MB"), "{back}");
+    app.press(KeyCode::Char('d'));
+    let dialog = app.render(140, 30);
+    assert!(dialog.contains("2 waste folders") && dialog.contains("4.0 MB"), "{dialog}");
+}
+
+#[test]
+fn marks_inside_a_folder_come_back_when_you_return() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Down, KeyCode::Right, KeyCode::Char(' ')]);
+    assert!(app.render(140, 24).contains("1 marked"));
+
+    press(&mut app, &[KeyCode::Left]);
+    let root = app.render(140, 24);
+    assert!(root.contains("0 marked (0 B) +1 elsewhere"), "{root}");
+
+    app.press(KeyCode::Right);
+    let again = app.render(140, 24);
+    assert!(again.contains("1 marked") && !again.contains("elsewhere"), "{again}");
+    assert!(again.lines().any(|l| l.contains("[x]") && l.contains("node_modules")), "{again}");
+}
+
+#[test]
+fn a_marks_visible_without_dropping_remembered_marks_and_n_resets_everything() {
+    let mut app = sample();
+    press(&mut app, &[KeyCode::Down, KeyCode::Right, KeyCode::Char(' '), KeyCode::Left, KeyCode::Char('a')]);
+    let screen = app.render(140, 24);
+    assert!(screen.contains("3 marked") && screen.contains("+1 elsewhere"), "{screen}");
+
+    app.press(KeyCode::Char('n'));
+    let cleared = app.render(140, 24);
+    assert!(cleared.contains("0 marked (0 B)") && !cleared.contains("elsewhere"), "{cleared}");
+}
+
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 fn has_spinner(line: &str) -> bool {

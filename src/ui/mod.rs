@@ -80,11 +80,13 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
         })
         .collect();
     let scope_total: u64 = app.scope_items().map(|i| i.size).sum();
+    let hidden = app.hidden_marks();
+    let elsewhere = if hidden > 0 { format!(" +{hidden} elsewhere") } else { String::new() };
     let title = format!(
-        " {} here · {} · {} marked ({}) · {} freed ",
+        " {} here · {} · {} marked ({}){elsewhere} · {} freed ",
         plural(app.scope_items().count(), "waste folder"),
         human(scope_total),
-        app.selected.len(),
+        app.visible_marked().len(),
         human(app.selected_size()),
         human(app.freed),
     );

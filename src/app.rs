@@ -252,12 +252,18 @@ impl App {
     }
 
     pub(crate) fn targets(&self) -> Vec<&Entry> {
-        let picked: Vec<&Entry> = if self.selected.is_empty() {
-            self.entries.get(self.cursor).into_iter().collect()
-        } else {
-            self.entries.iter().filter(|e| self.selected.contains(&e.path)).collect()
-        };
+        let marked = self.visible_marked();
+        let picked: Vec<&Entry> =
+            if marked.is_empty() { self.entries.get(self.cursor).into_iter().collect() } else { marked };
         picked.into_iter().filter(|e| e.count > 0).collect()
+    }
+
+    pub(crate) fn visible_marked(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| e.count > 0 && self.selected.contains(&e.path)).collect()
+    }
+
+    pub(crate) fn hidden_marks(&self) -> usize {
+        self.selected.len() - self.entries.iter().filter(|e| self.selected.contains(&e.path)).count()
     }
 
     fn set_cwd(&mut self, path: PathBuf) {
@@ -267,7 +273,7 @@ impl App {
     }
 
     pub(crate) fn selected_size(&self) -> u64 {
-        self.entries.iter().filter(|e| self.selected.contains(&e.path)).map(|e| e.size).sum()
+        self.visible_marked().iter().map(|e| e.size).sum()
     }
 
     fn move_cursor(&mut self, delta: isize) {
@@ -291,7 +297,6 @@ impl App {
             return;
         }
         let path = entry.path.clone();
-        self.selected.clear();
         self.cursor = 0;
         self.set_cwd(path);
         self.prioritize_view();
@@ -299,7 +304,6 @@ impl App {
 
     fn up(&mut self) {
         let came_from = self.cwd.clone();
-        self.selected.clear();
         if self.cwd == self.root {
             match self.root.parent().map(Path::to_path_buf) {
                 Some(parent) => {
@@ -363,7 +367,7 @@ impl App {
             failed: Vec::new(),
             stopped: false,
         });
-        self.selected.clear();
+        self.selected.retain(|p| !target_paths.iter().any(|t| p.starts_with(t)));
         self.mode = Mode::Deleting;
     }
 
@@ -466,7 +470,9 @@ impl App {
                         }
                     }
                     KeyCode::Char('a') => {
-                        self.selected = self.entries.iter().filter(|e| e.count > 0).map(|e| e.path.clone()).collect()
+                        let visible: Vec<PathBuf> =
+                            self.entries.iter().filter(|e| e.count > 0).map(|e| e.path.clone()).collect();
+                        self.selected.extend(visible);
                     }
                     KeyCode::Char('n') => self.selected.clear(),
                     KeyCode::Char('d') | KeyCode::Char('x') | KeyCode::Delete => {
