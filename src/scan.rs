@@ -140,6 +140,7 @@ impl State {
 pub struct Progress {
     pub base_pending: bool,
     pub pending_children: HashSet<PathBuf>,
+    pub already_scanned: HashSet<PathBuf>,
     pub visited: usize,
     pub running: bool,
 }
@@ -166,6 +167,13 @@ impl Scanner {
     fn spawn(&self) {
         let scanner = self.clone();
         thread::spawn(move || worker(&scanner.state, &scanner.tx, &scanner.cancel));
+    }
+
+    #[doc(hidden)]
+    pub fn idle(pending: Vec<PathBuf>, tx: Sender<Msg>) -> Self {
+        let mut state = State::new(PathBuf::new());
+        state.pending = pending;
+        Self { state: Arc::new(Mutex::new(state)), tx, cancel: Arc::new(AtomicBool::new(false)) }
     }
 
     pub fn prioritize(&self, path: &Path) {
@@ -200,7 +208,13 @@ impl Scanner {
                 }
             }
         }
-        Progress { base_pending, pending_children, visited: state.visited, running: state.running }
+        Progress {
+            base_pending,
+            pending_children,
+            already_scanned: state.skip.clone(),
+            visited: state.visited,
+            running: state.running,
+        }
     }
 
     pub fn stop(&self) {

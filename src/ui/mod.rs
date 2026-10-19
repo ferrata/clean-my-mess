@@ -69,7 +69,9 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
             let label_style = if entry.is_waste() { Style::new().fg(kind_color(kind)) } else { Style::new().fg(MUTED) };
             let mut spans = vec![Span::raw(format!("{mark} "))];
             spans.extend(split_bar(entry.size as f64 / max as f64, BAR_WIDTH, &entry.by_kind));
+            let progress = if app.entry_pending(entry) { format!(" {}", spinner(app.started)) } else { "  ".into() };
             spans.extend([
+                Span::styled(progress, Style::new().fg(MUTED)),
                 Span::raw(format!(" {:>9}  ", human(entry.size))),
                 Span::styled(format!("{label:<14} "), label_style),
                 Span::styled(name, name_style),

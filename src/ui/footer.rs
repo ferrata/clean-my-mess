@@ -45,7 +45,13 @@ pub(crate) fn footer_line(app: &App) -> Line<'static> {
     let what = if entry.is_waste() {
         format!(" delete this {} folder ", entry.kind.unwrap_or(""))
     } else {
-        format!(" delete all waste under {}/ ({}, {}) ", entry.name, plural(entry.count, "folder"), human(entry.size))
+        let partial = if app.entry_pending(entry) { ", still scanning" } else { "" };
+        format!(
+            " delete all waste under {}/ ({}, {}{partial}) ",
+            entry.name,
+            plural(entry.count, "folder"),
+            human(entry.size)
+        )
     };
     let mut spans = vec![key("d", Color::Red), Span::raw(what), Span::raw("(asks first)  ")];
     if !entry.is_waste() {

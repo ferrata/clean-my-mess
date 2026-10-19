@@ -56,7 +56,8 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
     ];
     lines.extend(legend_lines);
     lines.push(Line::raw(""));
-    let capacity = (f.area().height as usize).saturating_sub(13 + legend_height).clamp(2, 6);
+    let unfinished = targets.iter().any(|e| app.entry_pending(e));
+    let capacity = (f.area().height as usize).saturating_sub(13 + legend_height + usize::from(unfinished)).clamp(2, 6);
     let shown = if targets.len() > capacity { capacity - 1 } else { targets.len() };
     for entry in targets.iter().take(shown) {
         let kind = entry.kind.unwrap_or_else(|| entry.dominant());
@@ -77,6 +78,16 @@ pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
     }
     if targets.len() > shown {
         lines.push(Line::styled(format!("… and {} more", targets.len() - shown), dim));
+    }
+    if unfinished {
+        lines.push(Line::raw(""));
+        lines.push(
+            Line::styled(
+                "Still scanning here — only folders found so far are listed.",
+                Style::new().fg(Color::Indexed(179)),
+            )
+            .centered(),
+        );
     }
     lines.extend([
         Line::raw(""),

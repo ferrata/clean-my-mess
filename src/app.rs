@@ -78,6 +78,7 @@ pub struct App {
     pub(crate) scanner: Option<Scanner>,
     pub(crate) base_pending: bool,
     pub(crate) pending_children: HashSet<PathBuf>,
+    pub(crate) already_scanned: HashSet<PathBuf>,
     pub(crate) items: Vec<Item>,
     pub(crate) entries: Vec<Entry>,
     pub(crate) dirs: Vec<(PathBuf, String)>,
@@ -118,6 +119,15 @@ impl App {
     pub fn with_items(root: PathBuf, items: Vec<Item>) -> Self {
         let (_tx, rx) = mpsc::channel();
         let mut app = Self::build(root, rx, None, false);
+        app.items = items;
+        app.refresh();
+        app
+    }
+
+    #[doc(hidden)]
+    pub fn with_unfinished_scan(root: PathBuf, items: Vec<Item>, pending: Vec<PathBuf>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let mut app = Self::build(root, rx, Some(Scanner::idle(pending, tx)), true);
         app.items = items;
         app.refresh();
         app
@@ -167,6 +177,7 @@ impl App {
             scanner,
             base_pending: false,
             pending_children: HashSet::new(),
+            already_scanned: HashSet::new(),
             items: Vec::new(),
             entries: Vec::new(),
             selected: HashSet::new(),
@@ -212,7 +223,8 @@ impl App {
     }
 
     pub(crate) fn entry_pending(&self, entry: &Entry) -> bool {
-        self.base_pending || self.pending_children.contains(&entry.path)
+        let unknown = self.base_pending && !self.already_scanned.contains(&entry.path);
+        !entry.is_waste() && (unknown || self.pending_children.contains(&entry.path))
     }
 
     fn sync_progress(&mut self) {
@@ -220,6 +232,7 @@ impl App {
             let progress = scanner.progress(&self.cwd);
             self.base_pending = progress.base_pending;
             self.pending_children = progress.pending_children;
+            self.already_scanned = progress.already_scanned;
             self.visited = progress.visited;
             self.scanning = progress.running;
         }

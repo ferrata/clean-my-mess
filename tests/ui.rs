@@ -283,3 +283,62 @@ fn trash_is_refused_when_unavailable_and_nothing_changes() {
     assert!(screen.contains("Moving to Trash isn't supported"), "{screen}");
     assert!(screen.contains("4 waste folders here"));
 }
+
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+fn has_spinner(line: &str) -> bool {
+    line.chars().any(|c| SPINNER_FRAMES.contains(&c))
+}
+
+fn partly_scanned() -> App {
+    App::with_unfinished_scan(
+        PathBuf::from("/proj"),
+        vec![item("/proj/a/node_modules", "Node", 3 * MIB), item("/proj/b/target", "Rust", 9 * MIB)],
+        vec![PathBuf::from("/proj/a/deeper/still-queued")],
+    )
+}
+
+#[test]
+fn only_unfinished_rows_show_a_spinner() {
+    let screen = partly_scanned().render(120, 24);
+    assert!(has_spinner(row(&screen, "a/")), "a/ is still being scanned:\n{screen}");
+    assert!(!has_spinner(row(&screen, "b/")), "b/ is complete:\n{screen}");
+}
+
+#[test]
+fn spinner_follows_you_into_the_folder_but_not_onto_finished_waste() {
+    let mut app = partly_scanned();
+    press(&mut app, &[KeyCode::Down, KeyCode::Right]);
+    let inside = app.render(120, 24);
+    assert!(!has_spinner(row(&inside, "node_modules")), "a found waste folder is final:\n{inside}");
+}
+
+#[test]
+fn footer_and_dialog_warn_about_partial_results() {
+    let mut app = partly_scanned();
+    app.press(KeyCode::Down);
+    assert!(app.render(140, 24).contains("still scanning)"), "footer should say sizes may grow");
+
+    app.press(KeyCode::Char('d'));
+    let dialog = app.render(140, 30);
+    assert!(dialog.contains("Still scanning here"), "{dialog}");
+    assert!(dialog.contains("t  Trash"), "buttons must stay visible:\n{dialog}");
+    app.press(KeyCode::Esc);
+
+    app.press(KeyCode::Up);
+    app.press(KeyCode::Char('d'));
+    assert!(!app.render(140, 30).contains("Still scanning here"), "finished folders get no warning");
+}
+
+#[test]
+fn folder_you_came_from_stays_finished_when_you_go_above_the_scan_root() {
+    let mut app = App::with_unfinished_scan(
+        PathBuf::from("/proj/a"),
+        vec![item("/proj/a/node_modules", "Node", 3 * MIB), item("/proj/b/target", "Rust", 9 * MIB)],
+        vec![],
+    );
+    app.press(KeyCode::Left);
+    let screen = app.render(120, 24);
+    assert!(screen.contains("/proj "), "should now be viewing /proj:\n{screen}");
+    assert!(!has_spinner(row(&screen, "a/")), "a/ was already finished, it must not start spinning again:\n{screen}");
+}
