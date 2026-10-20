@@ -436,3 +436,61 @@ fn dialog_estimates_from_the_last_measured_delete_speed() {
     let after = app.render(110, 34);
     assert!(after.contains("Delete forever ~4s"), "4 MiB at 1 MiB/s:\n{after}");
 }
+
+fn drive(free: u64) -> clean_my_mess::disk::DiskStats {
+    clean_my_mess::disk::DiskStats { device: 1, total: 100 * MIB, free }
+}
+
+#[test]
+fn drive_panel_shows_usage_and_stays_still_between_deletes() {
+    let mut app = sample();
+    app.set_drive(Some(drive(40 * MIB)));
+    let screen = app.render(140, 24);
+    assert!(screen.contains("Drive"), "{screen}");
+    assert!(screen.contains("60.0 MB used of 100.0 MB"), "{screen}");
+    assert!(screen.contains("40.0 MB free (40%)"), "{screen}");
+    assert!(screen.contains("nothing measured yet"), "{screen}");
+    assert!(screen.contains("0 B deleted") && screen.contains("0 B in Trash"), "{screen}");
+
+    app.set_drive(Some(drive(52 * MIB)));
+    let after = app.render(140, 24);
+    assert!(after.contains("52.0 MB free"), "live free space follows the drive:\n{after}");
+    assert!(after.contains("nothing measured yet"), "background changes must not count as gains:\n{after}");
+}
+
+fn drive_bar_color(app: &App) -> Color {
+    let buffer = app.render_buffer(140, 24);
+    (4..24)
+        .flat_map(|y| (104..140).map(move |x| (x, y)))
+        .map(|pos| &buffer[pos])
+        .find(|cell| cell.symbol() == "█")
+        .map(|cell| cell.fg)
+        .expect("usage bar in the drive panel")
+}
+
+#[test]
+fn drive_bar_turns_from_green_to_red_as_the_drive_fills() {
+    let mut app = sample();
+    let mut color_at = |used: u64| {
+        app.set_drive(Some(drive(100 * MIB - used * MIB)));
+        drive_bar_color(&app)
+    };
+    let (roomy, tight, full) = (color_at(50), color_at(80), color_at(95));
+    assert!(roomy != tight && tight != full && roomy != full, "{roomy:?} {tight:?} {full:?}");
+    assert_eq!(color_at(50), roomy, "freeing space must bring the colour back");
+}
+
+#[test]
+fn drive_panel_is_hidden_on_narrow_terminals_and_copes_without_stats() {
+    let mut app = sample();
+    app.set_drive(Some(drive(40 * MIB)));
+    assert!(!app.render(110, 24).contains("Drive"));
+    app.set_drive(None);
+    assert!(app.render(140, 24).contains("Drive info unavailable"));
+}
+
+#[test]
+fn real_probe_reports_sane_numbers() {
+    let stats = clean_my_mess::disk::probe(&std::env::temp_dir()).expect("statvfs on temp dir");
+    assert!(stats.total > 0 && stats.free <= stats.total);
+}

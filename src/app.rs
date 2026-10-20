@@ -7,7 +7,7 @@ use std::{
         Arc,
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use ratatui::{
@@ -19,6 +19,7 @@ use ratatui::{
 
 use crate::{
     delete,
+    disk::{self, DiskStats},
     format::{human, plural},
     scan::{Item, Msg, Scanner},
     tree::{build_entries, list_dirs, Entry},
@@ -69,6 +70,7 @@ pub(crate) struct DeleteJob {
     pub(crate) current: PathBuf,
     pub(crate) failed: Vec<String>,
     pub(crate) stopped: bool,
+    pub(crate) free_before: Option<DiskStats>,
     pub(crate) started: Instant,
 }
 
@@ -90,6 +92,10 @@ pub struct App {
     pub(crate) choice: Choice,
     pub(crate) trash_dir: Option<PathBuf>,
     pub(crate) trashed: u64,
+    pub(crate) disk: Option<DiskStats>,
+    pub(crate) gained: Option<i128>,
+    pub(crate) probe_disk: bool,
+    pub(crate) last_probe: Option<Instant>,
     pub(crate) last_rate: Option<f64>,
     pub(crate) job: Option<DeleteJob>,
     pub(crate) gone: HashSet<PathBuf>,
@@ -114,6 +120,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let scanner = Scanner::start(root.clone(), tx);
         let mut app = Self::build(root, rx, Some(scanner), true);
+        app.probe_disk = true;
         app.refresh();
         app
     }
@@ -194,6 +201,10 @@ impl App {
             choice: Choice::Cancel,
             trash_dir: delete::default_trash_dir(),
             trashed: 0,
+            disk: None,
+            gained: None,
+            probe_disk: false,
+            last_probe: None,
             last_rate: None,
             job: None,
             gone: HashSet::new(),
@@ -220,7 +231,21 @@ impl App {
         }
     }
 
+    #[doc(hidden)]
+    pub fn set_drive(&mut self, stats: Option<DiskStats>) {
+        self.disk = stats;
+    }
+
+    fn poll_disk(&mut self, force: bool) {
+        let due = self.last_probe.map_or(true, |t| t.elapsed() >= Duration::from_secs(1));
+        if self.probe_disk && (force || due) {
+            self.last_probe = Some(Instant::now());
+            self.set_drive(disk::probe(&self.cwd));
+        }
+    }
+
     pub fn pump(&mut self) {
+        self.poll_disk(false);
         self.drain_scan();
         self.drain_delete();
         self.refresh();
@@ -374,6 +399,7 @@ impl App {
             current: PathBuf::new(),
             failed: Vec::new(),
             stopped: false,
+            free_before: self.disk,
             started: Instant::now(),
         });
         self.selected.retain(|p| !target_paths.iter().any(|t| p.starts_with(t)));
@@ -411,6 +437,13 @@ impl App {
             return;
         }
         let Some(job) = self.job.take() else { return };
+        self.poll_disk(true);
+        if let (true, Some(before), Some(after)) = (job.permanent, job.free_before, self.disk) {
+            if before.device == after.device {
+                let delta = i128::from(after.free) - i128::from(before.free);
+                self.gained = Some(self.gained.unwrap_or(0) + delta);
+            }
+        }
         let secs = job.started.elapsed().as_secs_f64();
         if job.permanent && !job.stopped && job.failed.is_empty() && secs >= 1.0 && job.done_bytes > 0 {
             self.last_rate = Some(job.done_bytes as f64 / secs);

@@ -2,6 +2,7 @@ mod bars;
 mod footer;
 mod legend;
 mod popup;
+mod side;
 
 use ratatui::{
     layout::{Constraint, Layout},
@@ -20,6 +21,8 @@ use bars::{split_bar, stacked_bar};
 use footer::footer_line;
 use legend::legend;
 use popup::{confirm_popup, progress_popup};
+
+const SIDE_MIN_WIDTH: u16 = 130;
 
 pub(crate) fn draw(f: &mut Frame, app: &App) {
     let [header, body, footer_area] =
@@ -98,7 +101,16 @@ pub(crate) fn draw(f: &mut Frame, app: &App) {
     if !app.entries.is_empty() {
         state.select(Some(app.cursor));
     }
+    let (body, side) = if body.width >= SIDE_MIN_WIDTH {
+        let [left, right] = Layout::horizontal([Constraint::Min(60), Constraint::Length(36)]).areas(body);
+        (left, Some(right))
+    } else {
+        (body, None)
+    };
     f.render_stateful_widget(list, body, &mut state);
+    if let Some(side) = side {
+        side::draw_drive(f, side, app);
+    }
     f.render_widget(Paragraph::new(footer_line(app)), footer_area);
 
     match app.mode {
