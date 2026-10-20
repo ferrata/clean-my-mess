@@ -22,7 +22,7 @@ fn fits_lines(lens: &[usize], width: usize, max_lines: usize) -> bool {
     lines <= max_lines && lens.iter().all(|&l| l <= width)
 }
 
-pub(crate) fn legend(
+pub(super) fn legend(
     totals: &[(&'static str, u64)],
     width: usize,
     max_lines: usize,

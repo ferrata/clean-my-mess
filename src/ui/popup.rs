@@ -15,7 +15,7 @@ use crate::{
     ui::{bars::stacked_bar, legend::legend},
 };
 
-pub(crate) fn button(label: &str, focused: bool, accent: Color) -> Span<'static> {
+fn button(label: &str, focused: bool, accent: Color) -> Span<'static> {
     let style = if focused {
         Style::new().fg(Color::Black).bg(accent).bold()
     } else {

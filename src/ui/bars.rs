@@ -5,7 +5,7 @@ use ratatui::{
 
 use crate::theme::{kind_color, MUTED};
 
-pub(crate) fn split_bar(ratio: f64, width: usize, parts: &[(&'static str, u64)]) -> Vec<Span<'static>> {
+pub(super) fn split_bar(ratio: f64, width: usize, parts: &[(&'static str, u64)]) -> Vec<Span<'static>> {
     const PARTIAL: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
     if parts.is_empty() {
         return vec![Span::styled("·".repeat(width), Style::new().fg(MUTED))];
@@ -55,7 +55,7 @@ pub(crate) fn split_bar(ratio: f64, width: usize, parts: &[(&'static str, u64)])
     spans
 }
 
-pub(crate) fn stacked_bar(totals: &[(&'static str, u64)], width: usize) -> Line<'static> {
+pub(super) fn stacked_bar(totals: &[(&'static str, u64)], width: usize) -> Line<'static> {
     let sum: u64 = totals.iter().map(|t| t.1).sum();
     if sum == 0 {
         return Line::from(Span::styled("·".repeat(width), Style::new().fg(MUTED)));

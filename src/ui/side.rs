@@ -38,7 +38,7 @@ fn usage_color(ratio: f64) -> Color {
     }
 }
 
-pub(crate) fn draw_drive(f: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw_drive(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::new().fg(MUTED);
     let green = Style::new().fg(Color::Indexed(108));
     let mut lines: Vec<Line<'static>> = Vec::new();

@@ -12,7 +12,7 @@ fn key(label: &str, color: Color) -> Span<'static> {
     Span::styled(label.to_string(), Style::new().fg(color).bold())
 }
 
-pub(crate) fn footer_line(app: &App) -> Line<'static> {
+pub(super) fn footer_line(app: &App) -> Line<'static> {
     if !app.status.is_empty() {
         return Line::from(app.status.clone()).fg(Color::Green);
     }
