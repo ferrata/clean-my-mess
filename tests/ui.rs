@@ -481,6 +481,21 @@ fn drive_bar_turns_from_green_to_red_as_the_drive_fills() {
 }
 
 #[test]
+fn drive_panel_summarises_what_the_selection_would_free() {
+    let mut app = sample();
+    app.set_drive(Some(drive(40 * MIB)));
+    assert!(app.render(140, 24).contains("nothing marked"));
+
+    app.press(KeyCode::Char('a'));
+    let screen = app.render(140, 24);
+    assert!(screen.contains("3 marked: 13.1 MB"), "{screen}");
+    assert!(screen.contains("> 53.1 MB free (53%)"), "{screen}");
+
+    app.press(KeyCode::Char('n'));
+    assert!(app.render(140, 24).contains("nothing marked"));
+}
+
+#[test]
 fn drive_panel_is_hidden_on_narrow_terminals_and_copes_without_stats() {
     let mut app = sample();
     app.set_drive(Some(drive(40 * MIB)));

@@ -64,6 +64,25 @@ pub(crate) fn draw_drive(f: &mut Frame, area: Rect, app: &App) {
     }
 
     lines.push(Line::raw(""));
+    lines.push(Line::styled("Selection", dim));
+    let marked = app.visible_marked().len();
+    if marked == 0 {
+        lines.push(Line::styled("nothing marked (space)", dim));
+    } else {
+        let size = app.selected_size();
+        lines.push(Line::from(vec![Span::raw(format!("{marked} marked: ")), Span::styled(human(size), green.bold())]));
+        if let Some(disk) = app.disk {
+            let free = disk.free.saturating_add(size).min(disk.total);
+            let pct = if disk.total == 0 { 0.0 } else { free as f64 / disk.total as f64 * 100.0 };
+            lines.push(Line::styled(format!("> {} free ({pct:.0}%)", human(free)), dim));
+        }
+    }
+    let elsewhere = app.hidden_marks();
+    if elsewhere > 0 {
+        lines.push(Line::styled(format!("+{elsewhere} marked elsewhere, not counted"), dim));
+    }
+
+    lines.push(Line::raw(""));
     lines.push(Line::styled("Cleared this session", dim));
     lines.push(Line::from(vec![
         Span::styled(human(app.freed), green.bold()),
