@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Choice},
+    app::{App, Choice, Mode},
     format::{estimate_remaining, format_duration, human, plural, spinner, truncate},
     theme::{kind_color, BACKDROP, MUTED, SHADOW},
     ui::{bars::stacked_bar, legend::legend},
@@ -24,7 +24,15 @@ pub(crate) fn button(label: &str, focused: bool, accent: Color) -> Span<'static>
     Span::styled(label.to_string(), style)
 }
 
-pub(crate) fn confirm_popup(f: &mut Frame, app: &App) {
+pub(super) fn draw(f: &mut Frame, app: &App) {
+    match app.mode {
+        Mode::Confirm => confirm_popup(f, app),
+        Mode::Deleting => progress_popup(f, app),
+        Mode::Normal => {}
+    }
+}
+
+fn confirm_popup(f: &mut Frame, app: &App) {
     let targets = app.targets();
     let count: usize = targets.iter().map(|e| e.count).sum();
     let size: u64 = targets.iter().map(|e| e.size).sum();
@@ -146,7 +154,7 @@ fn draw_popup(f: &mut Frame, lines: Vec<Line<'static>>, width: u16, title: &'sta
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-pub(crate) fn progress_popup(f: &mut Frame, app: &App) {
+fn progress_popup(f: &mut Frame, app: &App) {
     let Some(job) = app.job.as_ref() else { return };
     let width = f.area().width.min(76);
     let inner_width = width.saturating_sub(8) as usize;

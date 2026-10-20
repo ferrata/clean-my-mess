@@ -1,121 +1,34 @@
 mod bars;
 mod footer;
+mod header;
 mod legend;
+mod list;
 mod popup;
 mod side;
 
 use ratatui::{
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, List, ListItem, ListState, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
-use crate::{
-    app::{App, Mode},
-    format::{human, plural, spinner},
-    theme::{kind_color, BAR_WIDTH, MUTED},
-};
-use bars::{split_bar, stacked_bar};
+use crate::app::App;
 use footer::footer_line;
-use legend::legend;
-use popup::{confirm_popup, progress_popup};
-
-const SIDE_MIN_WIDTH: u16 = 130;
 
 pub(crate) fn draw(f: &mut Frame, app: &App) {
     let [header, body, footer_area] =
         Layout::vertical([Constraint::Length(4), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
+    let (list_area, side_area) = side::split(body);
 
-    let totals = app.kind_totals();
-    let scan_state = if !app.scanning {
-        "scan done".to_string()
-    } else if app.view_complete() {
-        format!("✓ this folder done · {} scanning elsewhere… {} dirs", spinner(app.started), app.visited)
-    } else {
-        format!("{} scanning… {} dirs", spinner(app.started), app.visited)
-    };
-    let block = Block::bordered().title(format!(" {} · {} ", app.cwd.display(), scan_state));
-    let inner = block.inner(header);
-    f.render_widget(block, header);
-    let (legend_lines, bar_totals) = legend(&totals, inner.width as usize, 1);
-    let mut header_lines = vec![stacked_bar(&bar_totals, inner.width as usize)];
-    header_lines.extend(legend_lines);
-    f.render_widget(Paragraph::new(header_lines), inner);
+    header::draw(f, header, app);
 
-    let max = app.entries.first().map(|e| e.size).unwrap_or(1).max(1);
-    let rows: Vec<ListItem> = app
-        .entries
-        .iter()
-        .map(|entry| {
-            let mark = if app.selected.contains(&entry.path) { "[x]" } else { "[ ]" };
-            let kind = entry.kind.unwrap_or_else(|| entry.dominant());
-            if entry.count == 0 {
-                let label = if app.entry_pending(entry) {
-                    format!("{} scanning…", spinner(app.started))
-                } else {
-                    "clean".into()
-                };
-                let dim = Style::new().fg(MUTED);
-                return ListItem::new(Line::from(vec![
-                    Span::raw(format!("{mark} ")),
-                    Span::styled("·".repeat(BAR_WIDTH), dim),
-                    Span::styled(format!(" {:>9}  {label:<14} {}/", "–", entry.name), dim),
-                ]));
-            }
-            let (label, name) = match entry.kind {
-                Some(k) => (k.to_string(), entry.name.clone()),
-                None => (plural(entry.count, "waste dir"), format!("{}/", entry.name)),
-            };
-            let name_style = if entry.is_waste() { Style::new() } else { Style::new().bold() };
-            let label_style = if entry.is_waste() { Style::new().fg(kind_color(kind)) } else { Style::new().fg(MUTED) };
-            let mut spans = vec![Span::raw(format!("{mark} "))];
-            spans.extend(split_bar(entry.size as f64 / max as f64, BAR_WIDTH, &entry.by_kind));
-            let progress = if app.entry_pending(entry) { format!(" {}", spinner(app.started)) } else { "  ".into() };
-            spans.extend([
-                Span::styled(progress, Style::new().fg(MUTED)),
-                Span::raw(format!(" {:>9}  ", human(entry.size))),
-                Span::styled(format!("{label:<14} "), label_style),
-                Span::styled(name, name_style),
-            ]);
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
-    let scope_total: u64 = app.scope_items().map(|i| i.size).sum();
-    let hidden = app.hidden_marks();
-    let elsewhere = if hidden > 0 { format!(" +{hidden} elsewhere") } else { String::new() };
-    let title = format!(
-        " {} here · {} · {} marked ({}){elsewhere} · {} freed ",
-        plural(app.scope_items().count(), "waste folder"),
-        human(scope_total),
-        app.visible_marked().len(),
-        human(app.selected_size()),
-        human(app.freed),
-    );
-    let list = List::new(rows)
-        .block(Block::bordered().title(title))
-        .highlight_symbol("▶ ")
-        .highlight_style(Style::new().bg(Color::Indexed(238)).add_modifier(Modifier::BOLD));
-    let mut state = ListState::default();
-    if !app.entries.is_empty() {
-        state.select(Some(app.cursor));
+    list::draw(f, list_area, app);
+
+    if let Some(side_area) = side_area {
+        side::draw_drive(f, side_area, app);
     }
-    let (body, side) = if body.width >= SIDE_MIN_WIDTH {
-        let [left, right] = Layout::horizontal([Constraint::Min(60), Constraint::Length(36)]).areas(body);
-        (left, Some(right))
-    } else {
-        (body, None)
-    };
-    f.render_stateful_widget(list, body, &mut state);
-    if let Some(side) = side {
-        side::draw_drive(f, side, app);
-    }
+
     f.render_widget(Paragraph::new(footer_line(app)), footer_area);
 
-    match app.mode {
-        Mode::Confirm => confirm_popup(f, app),
-        Mode::Deleting => progress_popup(f, app),
-        Mode::Normal => {}
-    }
+    popup::draw(f, app);
 }

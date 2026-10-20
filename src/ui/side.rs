@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
@@ -7,6 +7,17 @@ use ratatui::{
 };
 
 use crate::{app::App, format::human, theme::MUTED};
+
+const SIDE_MIN_WIDTH: u16 = 130;
+
+pub(super) fn split(body: Rect) -> (Rect, Option<Rect>) {
+    if body.width >= SIDE_MIN_WIDTH {
+        let [left, right] = Layout::horizontal([Constraint::Min(60), Constraint::Length(36)]).areas(body);
+        (left, Some(right))
+    } else {
+        (body, None)
+    }
+}
 
 fn signed(bytes: i128) -> String {
     let sign = if bytes > 0 {
