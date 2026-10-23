@@ -20,7 +20,7 @@ fn clean_row(app: &App, entry: &Entry, mark: &str) -> ListItem<'static> {
     ListItem::new(Line::from(vec![
         Span::raw(format!("{mark} ")),
         Span::styled("·".repeat(BAR_WIDTH), dim),
-        Span::styled(format!(" {:>9}  {label:<14} {}/", "–", entry.name), dim),
+        Span::styled(format!("   {:>9}  {label:<14} {}/", "–", entry.name), dim),
     ]))
 }
 
